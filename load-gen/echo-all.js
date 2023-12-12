@@ -4,7 +4,7 @@ import http from 'k6/http';
 // run for an hour in fluctuating 1-minute stages
 let stages = [];
 for (let i = 0; i < 60; i++) {
-    stages.push({duration: '1m', target: Math.floor(Math.random() * 1000)});
+    stages.push({duration: '1m', target: Math.floor(Math.random() * 10)});
 }
 
 export const options = {

@@ -2,8 +2,8 @@
 extensions:
   basicauth/otlp:
     client_auth:
-      username: ${GRAFANA_CLOUD_USER_ID}
-      password: ${GRAFANA_CLOUD_API_KEY}
+      username: team-a
+      password: team-a
 
 receivers:
   otlp:
@@ -18,8 +18,10 @@ exporters:
     endpoint: https://otlp-gateway-prod-us-central-0.grafana.net/otlp
     auth:
       authenticator: basicauth/otlp
-  otlphttp/mimir-local:
+  otlphttp/mimir-microservices-mode-local:
     endpoint: http://127.0.0.1:8000/otlp
+  otlphttp/mimir-monolithic-mode-local:
+    endpoint: http://127.0.0.1:8001/otlp
     # use for multi-tenant Mimir
     #    headers:
     #      "X-Scope-OrgId": "team-a"

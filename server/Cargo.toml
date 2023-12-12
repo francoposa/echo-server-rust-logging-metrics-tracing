@@ -20,6 +20,7 @@ serde_json = { version = "1.*", default-features = false }
 tokio = { version = "*", features = ["rt-multi-thread"], default-features = false }
 tower = { version = "*", default-features = false }
 tower-http = { version = "*", features = ["trace"], default-features = false }
+tower-otel-http-metrics = { version = "0.1.0", features = ["axum"], default-features = false }
 tracing = { version = "*", default-features = false }
 tracing-appender = { version = "*", default-features = false }
 tracing-bunyan-formatter = { version = "*", default-features = false }

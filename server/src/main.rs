@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::Duration;
 
 use axum::{
@@ -8,7 +7,6 @@ use axum::{
     http::Method,
     routing::{get, post, put, Router},
 };
-use echo_server_logging_metrics_tracing as lib;
 use hyper::server::Server;
 use hyper::HeaderMap;
 use opentelemetry::global;
@@ -21,6 +19,7 @@ use serde::Serialize;
 use serde_json::Value;
 use tower_http::classify::StatusInRangeAsFailures;
 use tower_http::trace::TraceLayer;
+use tower_otel_http_metrics;
 use tracing::level_filters::LevelFilter;
 use tracing::{info, instrument};
 use tracing_bunyan_formatter::{BunyanFormattingLayer, JsonStorageLayer};
@@ -112,14 +111,8 @@ async fn main() {
     tracing::subscriber::set_global_default(telemetry_subscriber).unwrap();
 
     // init our otel metrics middleware
-    let otel_metrics_service_layer = lib::HTTPMetricsLayer {
-        state: Arc::from(
-            echo_server_logging_metrics_tracing::HTTPMetricsLayerState::new(
-                String::from(SERVICE_NAME),
-                None,
-            ),
-        ),
-    };
+    let otel_metrics_service_layer =
+        tower_otel_http_metrics::HTTPMetricsLayer::new(String::from(SERVICE_NAME));
 
     let app = Router::new()
         .route("/", get(echo))
