@@ -58,7 +58,7 @@ service:
   pipelines:
     metrics:
       receivers: [ otlp ]
-      exporters: [ logging, otlphttp/mimir-local ]
+      exporters: [ logging ]
     traces:
       receivers: [ otlp ]
       exporters: [ logging ]

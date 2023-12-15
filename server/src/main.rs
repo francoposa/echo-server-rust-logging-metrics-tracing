@@ -7,6 +7,7 @@ use axum::{
     http::Method,
     routing::{get, post, put, Router},
 };
+use envy;
 use hyper::server::Server;
 use hyper::HeaderMap;
 use opentelemetry::global;
@@ -14,8 +15,8 @@ use opentelemetry::sdk::resource::{
     EnvResourceDetector, SdkProvidedResourceDetector, TelemetryResourceDetector,
 };
 use opentelemetry::sdk::Resource;
-use opentelemetry_otlp::{self, WithExportConfig};
-use serde::Serialize;
+use opentelemetry_otlp::{self};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tower_http::classify::StatusInRangeAsFailures;
 use tower_http::trace::TraceLayer;
@@ -23,29 +24,36 @@ use tower_otel_http_metrics;
 use tracing::level_filters::LevelFilter;
 use tracing::{info, instrument};
 use tracing_bunyan_formatter::{BunyanFormattingLayer, JsonStorageLayer};
-use tracing_subscriber::{prelude::*, Registry};
+use tracing_subscriber::prelude::*;
+use tracing_subscriber::{Layer, Registry};
 
 const SERVICE_NAME: &str = "echo-server";
 
-#[tokio::main]
-async fn main() {
-    // file writer layer to collect all levels of logs, mostly useful for debugging the logging setup
-    // let file_appender = tracing_appender::rolling::minutely("./logs", "trace");
-    // let (file_writer, _guard) = tracing_appender::non_blocking(file_appender);
-    // let file_writer_layer = tracing_subscriber::fmt::layer()
-    //     .json()
-    //     .with_writer(file_writer);
+#[derive(Deserialize)]
+struct Config {
+    #[serde(default = "file_exporter_enabled")]
+    file_logs_traces_exporter_enabled: bool,
+    #[serde(default = "std_stream_exporter_enabled")]
+    std_stream_logs_traces_exporter_enabled: bool,
+    #[serde(default = "otel_collector_exporter_enabled")]
+    otel_collector_logs_traces_exporter_enabled: bool,
+    #[serde(default = "otel_collector_exporter_enabled")]
+    otel_collector_metrics_exporter_enabled: bool,
+}
 
-    // stdout/stderr log layer for non-tracing logs to be collected into ElasticSearch or similar
-    let std_stream_log_subscriber_layer =
-        BunyanFormattingLayer::new(SERVICE_NAME.into(), std::io::stderr)
-            .with_filter(LevelFilter::INFO);
+fn file_exporter_enabled() -> bool {
+    false
+}
 
-    //
-    // init opentelemetry layers for logs + traces and metrics
-    //
+fn std_stream_exporter_enabled() -> bool {
+    false
+}
 
-    // init otel resource config
+fn otel_collector_exporter_enabled() -> bool {
+    true
+}
+
+fn init_otel_resource() -> Resource {
     let otlp_resource_detected = Resource::from_detectors(
         Duration::from_secs(3),
         vec![
@@ -57,58 +65,93 @@ async fn main() {
     let otlp_resource_override = Resource::new(vec![
         opentelemetry_semantic_conventions::resource::SERVICE_NAME.string(SERVICE_NAME),
     ]);
-    let otlp_resource = otlp_resource_detected.merge(&otlp_resource_override);
+    otlp_resource_detected.merge(&otlp_resource_override)
+}
 
-    // init otel tracing propogator; see more about opentelemetry propagators here:
-    // https://github.com/open-telemetry/opentelemetry-specification/blob/main/specification/context/api-propagators.md
-    global::set_text_map_propagator(opentelemetry::sdk::propagation::TraceContextPropagator::new());
+fn init_otel_subscribers() {
+    let config = envy::from_env::<Config>().unwrap();
 
-    // init otel tracing pipeline
-    // https://docs.rs/opentelemetry-otlp/latest/opentelemetry_otlp/#kitchen-sink-full-configuration
-    // this pipeline will log connection errors to stderr if it cannot reach the collector endpoint
-    let otel_trace_pipeline = opentelemetry_otlp::new_pipeline()
-        .tracing()
-        .with_exporter(
-            opentelemetry_otlp::new_exporter()
-                .tonic()
-                .with_endpoint("http://localhost:4317"),
-        )
-        .with_trace_config(
-            opentelemetry::sdk::trace::config().with_resource(otlp_resource.clone()),
+    let mut file_writer_layer = None;
+    if config.file_logs_traces_exporter_enabled {
+        // file writer layer to collect all levels of logs, mostly useful for debugging the logging setup
+        let file_appender = tracing_appender::rolling::minutely("./logs", "trace");
+        let (file_writer, _guard) = tracing_appender::non_blocking(file_appender);
+        file_writer_layer = Option::from(
+            tracing_subscriber::fmt::layer()
+                .json()
+                .with_writer(file_writer),
+        );
+        // tracing_subscriber::Layer::with_subscriber(file_writer_layer, telemetry_subscriber);
+        // file_writer_layer.with_subscriber(Dispatch::default());
+        // telemetry_subscriber = telemetry_subscriber.with(file_writer_layer);
+    }
+
+    let mut std_stream_log_subscriber_layer = None;
+    if config.std_stream_logs_traces_exporter_enabled {
+        // stdout/stderr log layer for non-tracing logs to be collected into ElasticSearch or similar
+        let _std_stream_log_subscriber_layer =
+            BunyanFormattingLayer::new(SERVICE_NAME.into(), std::io::stderr)
+                .with_filter(LevelFilter::INFO);
+        std_stream_log_subscriber_layer = Option::from(_std_stream_log_subscriber_layer);
+    }
+
+    let mut otel_log_trace_subscriber_layer = None;
+    if config.otel_collector_logs_traces_exporter_enabled {
+        // init otel tracing propogator; see more about opentelemetry propagators here:
+        // https://github.com/open-telemetry/opentelemetry-specification/blob/main/specification/context/api-propagators.md
+        global::set_text_map_propagator(
+            opentelemetry::sdk::propagation::TraceContextPropagator::new(),
         );
 
-    // init otel tracer
-    // use this stdout pipeline instead to debug or view the opentelemetry data without a collector
-    // let otel_tracer = opentelemetry_stdout::new_pipeline().install_simple();
-    let otel_tracer = otel_trace_pipeline
-        .install_batch(opentelemetry::runtime::Tokio)
-        .unwrap();
-    let otel_log_trace_subscriber_layer = tracing_opentelemetry::layer().with_tracer(otel_tracer);
-
-    // init otel metrics pipeline
-    // https://docs.rs/opentelemetry-otlp/latest/opentelemetry_otlp/#kitchen-sink-full-configuration
-    // this configuration interface is annoyingly slightly different from the tracing one
-    let otel_metrics_subscriber_layer = tracing_opentelemetry::MetricsLayer::new(
-        opentelemetry_otlp::new_pipeline()
-            .metrics(opentelemetry::runtime::Tokio)
+        // init otel tracing pipeline
+        // https://docs.rs/opentelemetry-otlp/latest/opentelemetry_otlp/#kitchen-sink-full-configuration
+        // this pipeline will log connection errors to stderr if it cannot reach the collector endpoint
+        let otel_trace_pipeline = opentelemetry_otlp::new_pipeline()
+            .tracing()
             .with_exporter(
-                opentelemetry_otlp::new_exporter()
-                    .tonic()
-                    .with_endpoint("http://localhost:4317"),
+                opentelemetry_otlp::new_exporter().tonic(), // default endpoint http://localhost:4317
             )
-            .with_resource(otlp_resource.clone())
-            .with_period(Duration::from_secs(15))
-            .build()
-            .unwrap(),
-    );
+            .with_trace_config(
+                opentelemetry::sdk::trace::config().with_resource(init_otel_resource()),
+            );
+
+        // init otel tracer
+        // use this stdout pipeline instead to debug or view the opentelemetry data without a collector
+        // let otel_tracer = opentelemetry_stdout::new_pipeline().install_simple();
+        let otel_tracer = otel_trace_pipeline
+            .install_batch(opentelemetry::runtime::Tokio)
+            .unwrap();
+        otel_log_trace_subscriber_layer =
+            Option::from(tracing_opentelemetry::layer().with_tracer(otel_tracer));
+    }
+
+    let mut otel_metrics_subscriber_layer = None;
+    if config.otel_collector_metrics_exporter_enabled {
+        // init otel metrics pipeline
+        // https://docs.rs/opentelemetry-otlp/latest/opentelemetry_otlp/#kitchen-sink-full-configuration
+        // this configuration interface is annoyingly slightly different from the tracing one
+        otel_metrics_subscriber_layer = Option::from(tracing_opentelemetry::MetricsLayer::new(
+            opentelemetry_otlp::new_pipeline()
+                .metrics(opentelemetry::runtime::Tokio)
+                .with_exporter(opentelemetry_otlp::new_exporter().tonic()) // default endpoint http://localhost:4317
+                .with_resource(init_otel_resource())
+                .build()
+                .unwrap(),
+        ));
+    }
 
     let telemetry_subscriber = Registry::default()
-        // .with(file_writer_layer)
+        .with(file_writer_layer)
         .with(JsonStorageLayer) // stores fields across spans for the bunyan formatter
         .with(std_stream_log_subscriber_layer)
         .with(otel_log_trace_subscriber_layer)
         .with(otel_metrics_subscriber_layer);
     tracing::subscriber::set_global_default(telemetry_subscriber).unwrap();
+}
+
+#[tokio::main]
+async fn main() {
+    init_otel_subscribers();
 
     // init our otel metrics middleware
     let otel_metrics_service_layer =
