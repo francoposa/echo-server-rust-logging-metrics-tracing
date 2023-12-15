@@ -81,9 +81,6 @@ fn init_otel_subscribers() {
                 .json()
                 .with_writer(file_writer),
         );
-        // tracing_subscriber::Layer::with_subscriber(file_writer_layer, telemetry_subscriber);
-        // file_writer_layer.with_subscriber(Dispatch::default());
-        // telemetry_subscriber = telemetry_subscriber.with(file_writer_layer);
     }
 
     let mut std_stream_log_subscriber_layer = None;
