@@ -15,7 +15,7 @@ use opentelemetry::sdk::resource::{
     EnvResourceDetector, SdkProvidedResourceDetector, TelemetryResourceDetector,
 };
 use opentelemetry::sdk::Resource;
-use opentelemetry_otlp::{self};
+use opentelemetry_otlp::{self, WithExportConfig};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tower_http::classify::StatusInRangeAsFailures;
@@ -105,9 +105,7 @@ fn init_otel_subscribers() {
         // this pipeline will log connection errors to stderr if it cannot reach the collector endpoint
         let otel_trace_pipeline = opentelemetry_otlp::new_pipeline()
             .tracing()
-            .with_exporter(
-                opentelemetry_otlp::new_exporter().tonic(), // default endpoint http://localhost:4317
-            )
+            .with_exporter(opentelemetry_otlp::new_exporter().tonic().with_env()) // default endpoint http://localhost:4317
             .with_trace_config(
                 opentelemetry::sdk::trace::config().with_resource(init_otel_resource()),
             );
@@ -127,13 +125,14 @@ fn init_otel_subscribers() {
         // init otel metrics pipeline
         // https://docs.rs/opentelemetry-otlp/latest/opentelemetry_otlp/#kitchen-sink-full-configuration
         // this configuration interface is annoyingly slightly different from the tracing one
+        let otel_metrics_pipeline = opentelemetry_otlp::new_pipeline()
+            .metrics(opentelemetry::runtime::Tokio)
+            .with_exporter(opentelemetry_otlp::new_exporter().tonic().with_env()) // default endpoint http://localhost:4317
+            .with_resource(init_otel_resource())
+            .build()
+            .unwrap();
         otel_metrics_subscriber_layer = Option::from(tracing_opentelemetry::MetricsLayer::new(
-            opentelemetry_otlp::new_pipeline()
-                .metrics(opentelemetry::runtime::Tokio)
-                .with_exporter(opentelemetry_otlp::new_exporter().tonic()) // default endpoint http://localhost:4317
-                .with_resource(init_otel_resource())
-                .build()
-                .unwrap(),
+            otel_metrics_pipeline,
         ));
     }
 

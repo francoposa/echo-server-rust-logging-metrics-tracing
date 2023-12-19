@@ -1,4 +1,4 @@
-import { sleep } from 'k6';
+import {sleep} from 'k6';
 import http from 'k6/http';
 
 // run for an hour in fluctuating 1-minute stages
@@ -11,8 +11,9 @@ export const options = {
     stages: stages,
 };
 
-const echoDefaultEndpoint = 'http://localhost:5000'
-const echoJSONEndpoint = 'http://localhost:5000/json'
+// TODO get these from environment
+const echoDefaultEndpoint = 'http://echo-server:5000'
+const echoJSONEndpoint = 'http://echo-server:5000/json'
 
 const endpoints = [
     echoDefaultEndpoint,

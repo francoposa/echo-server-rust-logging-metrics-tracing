@@ -2,8 +2,7 @@ FROM rust:1-bullseye as builder
 WORKDIR /home/echo-server
 
 RUN apt-get update \
-    && apt-get install -y protobuf-compiler \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get install -y protobuf-compiler
 
 COPY ./server/Cargo.toml ./server/Cargo.toml
 COPY ./server/Cargo.lock ./server/Cargo.lock

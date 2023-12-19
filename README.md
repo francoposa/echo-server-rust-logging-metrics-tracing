@@ -32,7 +32,7 @@ I have also added the options to enable or disable stdout/stderr logging, file l
 
 Environment variable names and defaults subject to change.
 
-File and stdout/stderr exporters are still OTEL-formatted logs and traces,
+File and stdout/stderr exporters are still OTEL-structured logs and traces,
 just not using the OTEL Rust exporter SDKs which are focused on exports over the wire to collectors.
 
 ## Operation

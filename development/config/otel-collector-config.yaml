@@ -20,13 +20,15 @@ exporters:
       authenticator: basicauth/otlp
   otlphttp/mimir-microservices-mode-local:
     endpoint: http://127.0.0.1:8000/otlp
-  otlphttp/mimir-monolithic-mode-local:
-    endpoint: http://127.0.0.1:8001/otlp
     # use for multi-tenant Mimir
     #    headers:
     #      "X-Scope-OrgId": "team-a"
     #    auth:
     #      authenticator: basicauth/otlp
+  otlphttp/mimir-monolithic-mode-local:
+    endpoint: http://127.0.0.1:8001/otlp
+  otlphttp/mimir-monolithic-mode-docker-compose:
+    endpoint: http://mimir:8001/otlp
   otlphttp/grafana-enterprise-metrics-local:
     endpoint: http://127.0.0.1:8081/otlp
     headers:
@@ -58,7 +60,7 @@ service:
   pipelines:
     metrics:
       receivers: [ otlp ]
-      exporters: [ logging ]
+      exporters: [ otlphttp/mimir-monolithic-mode-docker-compose ]
     traces:
       receivers: [ otlp ]
       exporters: [ logging ]
