@@ -131,6 +131,10 @@ fn init_otel_subscribers() {
             .with_resource(init_otel_resource())
             .build()
             .unwrap();
+        // the call to build() registers the global meter provider so we do not need to
+        // register a subscriber layer the way we do with the tracing/logging SDK,
+        // but we can do it here for consistency's sake and maybe one day the OTEL SDKs
+        // will have more consistent configuration interfaces
         otel_metrics_subscriber_layer = Option::from(tracing_opentelemetry::MetricsLayer::new(
             otel_metrics_pipeline,
         ));
