@@ -23,7 +23,8 @@ Of particular interest are:
 
 ### Additional Configuration
 
-I have also added the options to enable or disable stdout/stderr logging, file logging, (logs + traces) exporting, and metrics exporting:
+I have also added the options to enable or disable stdout/stderr logging, file logging, (logs + traces) exporting, and
+metrics exporting:
 
 * `FILE_LOGS_TRACES_EXPORTER_ENABLED`: default `false`
 * `STD_STREAM_LOGS_TRACES_EXPORTER_ENABLED`: default `false`
@@ -35,13 +36,57 @@ Environment variable names and defaults subject to change.
 File and stdout/stderr exporters are still OTEL-structured logs and traces,
 just not using the OTEL Rust exporter SDKs which are focused on exports over the wire to collectors.
 
-## Operation
+## Usage
+
+### Docker Compose
+
+#### Echo Server
+
+In the `development` directory, bring up the echo server with:
 
 ```shell
+docker-compose up -d echo-server  # add the --build option to include any local changes
+```
+
+The Docker Compose configuration binds the container port to the host network's port 5000.
+Hit either the vanilla echo endpoint at `localhost:5000` or the json echo endpoint at `localhost:5000/json`:
+
+```shell
+curl -i -X GET localhost:5000/ -d 'hello world'
+
 curl -i -X GET --header "content-type: application/json" localhost:5000/json -d '{"hello": "world"}'
 ```
 
-### Tracing
+#### Telemetry Collectors
+
+Only use one of the two collectors for the telemetry data, either the OTEL Collector or Grafana Agent:
+
+```shell
+docker-compose up -d otel-collector
+# or
+docker-compose up -d grafana-agent
+```
+
+For now, the pre-set-up configuration options are more limited for the Grafana Agent.
+
+#### Ingesting And Visualizing Metrics:
+
+The Docker Compose setup uses Grafana's Mimir metrics database in monolithic mode to ingest metrics,
+and Grafana (the visualization application itself) to query and graph the data.
+
+Querying may also be done via HTTP calls to Mimir's Prometheus query endpoints.
+
+```shell
+docker compose up -d mimir grafana
+```
+
+Access the Grafana UI at `localhost:3000/explore` and view the metrics with a PromQL query:
+
+```PromQL
+rate(http_server_request_duration_count[1m])
+```
+
+### Ingesting and Visualizing Traces
 
 The easiest way to view traces is with the Jaeger all-in-one docker image.
 Jaeger added support for OpenTelemetry-formatted traces in v1.35

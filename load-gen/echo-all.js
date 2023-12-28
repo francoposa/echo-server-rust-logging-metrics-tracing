@@ -1,10 +1,9 @@
-import {sleep} from 'k6';
 import http from 'k6/http';
 
 // run for an hour in fluctuating 1-minute stages
 let stages = [];
 for (let i = 0; i < 60; i++) {
-    stages.push({duration: '1m', target: Math.floor(Math.random() * 10)});
+    stages.push({duration: '1m', target: Math.floor(Math.random() * 100)});
 }
 
 export const options = {
@@ -49,5 +48,4 @@ export default function () {
     };
 
     http.request(method, url, payload, params);
-    sleep(Math.random() * 10);
 }

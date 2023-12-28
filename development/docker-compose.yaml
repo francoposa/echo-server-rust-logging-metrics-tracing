@@ -10,6 +10,7 @@ services:
     container_name: echo-server
     environment:
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      #      - OTEL_EXPORTER_OTLP_ENDPOINT=http://grafana-agent:4317
       - OTEL_METRIC_EXPORT_INTERVAL=10000
     networks:
       echo-server:
@@ -25,6 +26,20 @@ services:
       echo-server:
     volumes:
       - ./config/otel-collector-config.yaml:/etc/otel-collector-config.yaml
+
+  # grafana agent serves as an alternative to the OTEL collector
+  grafana-agent:
+    image: grafana/agent:latest
+    container_name: grafana_agent
+    command: run --server.http.listen-addr=0.0.0.0:12345 /etc/agent/config.river
+    environment:
+      - AGENT_MODE=flow
+    networks:
+      echo-server:
+    ports:
+      - "12345:12345"
+    volumes:
+      - ./config/grafana-agent.river:/etc/agent/config.river
 
   k6-load-gen:
     image: grafana/k6:latest
