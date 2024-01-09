@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -7,15 +8,14 @@ use axum::{
     http::Method,
     routing::{get, post, put, Router},
 };
+// use axum_macros::debug_handler;
 use envy;
-use hyper::server::Server;
 use hyper::HeaderMap;
-use opentelemetry::global;
-use opentelemetry::sdk::resource::{
+use opentelemetry_otlp::{self};
+use opentelemetry_sdk::resource::{
     EnvResourceDetector, SdkProvidedResourceDetector, TelemetryResourceDetector,
 };
-use opentelemetry::sdk::Resource;
-use opentelemetry_otlp::{self, WithExportConfig};
+use opentelemetry_sdk::Resource;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tower_http::classify::StatusInRangeAsFailures;
@@ -25,7 +25,7 @@ use tracing::level_filters::LevelFilter;
 use tracing::{info, instrument};
 use tracing_bunyan_formatter::{BunyanFormattingLayer, JsonStorageLayer};
 use tracing_subscriber::prelude::*;
-use tracing_subscriber::{Layer, Registry};
+use tracing_subscriber::Registry;
 
 const SERVICE_NAME: &str = "echo-server";
 
@@ -96,8 +96,8 @@ fn init_otel_subscribers() {
     if config.otel_collector_logs_traces_exporter_enabled {
         // init otel tracing propogator; see more about opentelemetry propagators here:
         // https://github.com/open-telemetry/opentelemetry-specification/blob/main/specification/context/api-propagators.md
-        global::set_text_map_propagator(
-            opentelemetry::sdk::propagation::TraceContextPropagator::new(),
+        opentelemetry::global::set_text_map_propagator(
+            opentelemetry_sdk::propagation::TraceContextPropagator::new(),
         );
 
         // init otel tracing pipeline
@@ -105,16 +105,16 @@ fn init_otel_subscribers() {
         // this pipeline will log connection errors to stderr if it cannot reach the collector endpoint
         let otel_trace_pipeline = opentelemetry_otlp::new_pipeline()
             .tracing()
-            .with_exporter(opentelemetry_otlp::new_exporter().tonic().with_env()) // default endpoint http://localhost:4317
+            .with_exporter(opentelemetry_otlp::new_exporter().tonic()) // default endpoint http://localhost:4317
             .with_trace_config(
-                opentelemetry::sdk::trace::config().with_resource(init_otel_resource()),
+                opentelemetry_sdk::trace::config().with_resource(init_otel_resource()),
             );
 
         // init otel tracer
         // use this stdout pipeline instead to debug or view the opentelemetry data without a collector
         // let otel_tracer = opentelemetry_stdout::new_pipeline().install_simple();
         let otel_tracer = otel_trace_pipeline
-            .install_batch(opentelemetry::runtime::Tokio)
+            .install_batch(opentelemetry_sdk::runtime::Tokio)
             .unwrap();
         otel_log_trace_subscriber_layer =
             Option::from(tracing_opentelemetry::layer().with_tracer(otel_tracer));
@@ -126,8 +126,8 @@ fn init_otel_subscribers() {
         // https://docs.rs/opentelemetry-otlp/latest/opentelemetry_otlp/#kitchen-sink-full-configuration
         // this configuration interface is annoyingly slightly different from the tracing one
         let otel_metrics_pipeline = opentelemetry_otlp::new_pipeline()
-            .metrics(opentelemetry::runtime::Tokio)
-            .with_exporter(opentelemetry_otlp::new_exporter().tonic().with_env()) // default endpoint http://localhost:4317
+            .metrics(opentelemetry_sdk::runtime::Tokio)
+            .with_exporter(opentelemetry_otlp::new_exporter().tonic()) // default endpoint http://localhost:4317
             .with_resource(init_otel_resource())
             .build()
             .unwrap();
@@ -154,8 +154,11 @@ async fn main() {
     init_otel_subscribers();
 
     // init our otel metrics middleware
-    let otel_metrics_service_layer =
-        tower_otel_http_metrics::HTTPMetricsLayer::new(String::from(SERVICE_NAME));
+    let global_meter = opentelemetry_api::global::meter(Cow::from(SERVICE_NAME));
+    let otel_metrics_service_layer = tower_otel_http_metrics::HTTPMetricsLayerBuilder::new()
+        .with_meter(global_meter)
+        .build()
+        .unwrap();
 
     let app = Router::new()
         .route("/", get(echo))
@@ -170,12 +173,14 @@ async fn main() {
         ))
         .layer(otel_metrics_service_layer);
 
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:5000").await.unwrap();
     info!("starting {}...", SERVICE_NAME);
 
-    Server::bind(&"0.0.0.0:5000".parse().unwrap())
-        .serve(app.into_make_service())
-        .await
-        .unwrap();
+    let server = axum::serve(listener, app);
+
+    if let Err(err) = server.await {
+        eprintln!("server error: {}", err);
+    }
 }
 
 #[instrument(skip(headers, bytes))]
