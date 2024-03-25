@@ -19,10 +19,11 @@ use opentelemetry_sdk::Resource;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tower_http::classify::StatusInRangeAsFailures;
+use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tower_otel_http_metrics;
-use tracing::level_filters::LevelFilter;
 use tracing::{info, instrument};
+use tracing::level_filters::LevelFilter;
 use tracing_bunyan_formatter::{BunyanFormattingLayer, JsonStorageLayer};
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::Registry;
@@ -160,6 +161,9 @@ async fn main() {
         .build()
         .unwrap();
 
+    // init CORS layer
+    let cors = CorsLayer::permissive();
+
     let app = Router::new()
         .route("/", get(echo))
         .route("/", post(echo))
@@ -167,6 +171,7 @@ async fn main() {
         .route("/json", get(echo_json))
         .route("/json", post(echo_json))
         .route("/json", put(echo_json))
+        .layer(cors)
         .layer(TraceLayer::new(
             // by default the tower http trace layer only classifies 5xx errors as failures
             StatusInRangeAsFailures::new(400..=599).into_make_classifier(),
