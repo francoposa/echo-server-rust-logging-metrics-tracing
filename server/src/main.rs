@@ -2,44 +2,60 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::time::Duration;
 
-use axum::{
-    body::Bytes,
-    extract::{Json, MatchedPath},
-    http::Method,
-    routing::{get, post, put, Router},
-};
+use axum::body::Bytes;
+use axum::extract::{Json, MatchedPath};
+use axum::http::{HeaderMap, Method};
+use axum::routing::{get, post, put, Router};
 // use axum_macros::debug_handler;
 use envy;
-use hyper::HeaderMap;
-use opentelemetry_otlp::{self};
+use log::info as log_info;
+use opentelemetry::metrics::MeterProvider;
+use opentelemetry_appender_log::OpenTelemetryLogBridge;
+use opentelemetry_otlp::{self, TonicExporterBuilder, WithExportConfig};
 use opentelemetry_sdk::resource::{
     EnvResourceDetector, SdkProvidedResourceDetector, TelemetryResourceDetector,
 };
 use opentelemetry_sdk::Resource;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tokio::signal;
 use tower_http::classify::StatusInRangeAsFailures;
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
-use tower_otel_http_metrics;
-use tracing::{info, instrument};
-use tracing::level_filters::LevelFilter;
-use tracing_bunyan_formatter::{BunyanFormattingLayer, JsonStorageLayer};
-use tracing_subscriber::prelude::*;
-use tracing_subscriber::Registry;
+use tracing::log::Level;
+use tracing::{info as tracing_info, instrument};
+use tracing_opentelemetry::layer;
+use tracing_subscriber::layer::SubscriberExt;
+use {tower_otel_http_metrics, tracing};
 
-const SERVICE_NAME: &str = "echo-server";
+const SERVICE_NAME: &str = "echo-server-rust";
 
 #[derive(Deserialize)]
 struct Config {
+    #[serde(default = "server_addr")]
+    server_addr: String,
+
     #[serde(default = "file_exporter_enabled")]
-    file_logs_traces_exporter_enabled: bool,
+    file_traces_exporter_enabled: bool,
+
     #[serde(default = "std_stream_exporter_enabled")]
-    std_stream_logs_traces_exporter_enabled: bool,
+    std_stream_logs_exporter_enabled: bool,
+
+    #[serde(default = "std_stream_exporter_enabled")]
+    std_stream_traces_exporter_enabled: bool,
+
     #[serde(default = "otel_collector_exporter_enabled")]
-    otel_collector_logs_traces_exporter_enabled: bool,
+    otel_collector_logs_exporter_enabled: bool,
+
+    #[serde(default = "otel_collector_exporter_enabled")]
+    otel_collector_traces_exporter_enabled: bool,
+
     #[serde(default = "otel_collector_exporter_enabled")]
     otel_collector_metrics_exporter_enabled: bool,
+}
+
+fn server_addr() -> String {
+    String::from("0.0.0.0:8080")
 }
 
 fn file_exporter_enabled() -> bool {
@@ -63,18 +79,76 @@ fn init_otel_resource() -> Resource {
             Box::new(TelemetryResourceDetector),
         ],
     );
-    let otlp_resource_override = Resource::new(vec![
-        opentelemetry_semantic_conventions::resource::SERVICE_NAME.string(SERVICE_NAME),
-    ]);
+    let otlp_resource_override = Resource::new(vec![opentelemetry::KeyValue {
+        key: opentelemetry_semantic_conventions::resource::SERVICE_NAME.into(),
+        value: SERVICE_NAME.into(),
+    }]);
     otlp_resource_detected.merge(&otlp_resource_override)
 }
 
-fn init_otel_subscribers() {
-    let config = envy::from_env::<Config>().unwrap();
+fn init_otel(config: &Config) {
+    // ************************************ METRICS ************************************
+    if config.otel_collector_metrics_exporter_enabled {
+        opentelemetry_otlp::new_pipeline()
+            .metrics(opentelemetry_sdk::runtime::Tokio)
+            .with_exporter(opentelemetry_otlp::new_exporter().tonic())
+            .with_resource(init_otel_resource())
+            .build()
+            .unwrap();
+    }
+
+    // ************************************ LOGS ************************************
+    // we have to do this with the lower-level builder methods because the standard  higher-level builder
+    // from opentelemetry_otlp::new_pipeline()::logging() does not support multiple exporters / processors
+    let provider_builder = opentelemetry_sdk::logs::LoggerProvider::builder();
+    let mut provider_builder = provider_builder
+        .with_config(opentelemetry_sdk::logs::config().with_resource(init_otel_resource()));
+
+    if config.otel_collector_logs_exporter_enabled {
+        let batch_exporter = TonicExporterBuilder::default()
+            .with_endpoint("http://localhost:4317") // default is http://localhost:4317; explicit over implicit
+            .build_log_exporter()
+            .unwrap();
+        let batch_processor = opentelemetry_sdk::logs::BatchLogProcessor::builder(
+            batch_exporter,
+            opentelemetry_sdk::runtime::Tokio,
+        )
+        .build();
+        provider_builder = provider_builder.with_log_processor(batch_processor);
+    }
+
+    if config.std_stream_logs_exporter_enabled {
+        let simple_exporter = opentelemetry_stdout::LogExporterBuilder::default()
+            .with_writer(std::io::stderr())
+            .build();
+        let simple_processor = opentelemetry_sdk::logs::BatchLogProcessor::builder(
+            simple_exporter,
+            opentelemetry_sdk::runtime::Tokio,
+        )
+        .build();
+        provider_builder = provider_builder.with_log_processor(simple_processor);
+    }
+
+    let provider = provider_builder.build();
+    // don't use the return value from set_logger_provider; don't ask me why
+    // for some reason it returns the old value that was deregistered from the global
+    opentelemetry::global::set_logger_provider(provider);
+    // use this to pull down the new logger provider
+    let global_logger_provider = opentelemetry::global::logger_provider();
+    let otel_log_appender = OpenTelemetryLogBridge::new(&global_logger_provider);
+    log::set_boxed_logger(Box::new(otel_log_appender)).unwrap();
+    log::set_max_level(Level::Info.to_level_filter());
+
+    // ************************************ TRACES ************************************
+    // init otel tracing propogator; see more about opentelemetry propagators here:
+    // https://github.com/open-telemetry/opentelemetry-specification/blob/main/specification/context/api-propagators.md
+    opentelemetry::global::set_text_map_propagator(
+        opentelemetry_sdk::propagation::TraceContextPropagator::new(),
+    );
 
     let mut file_writer_layer = None;
-    if config.file_logs_traces_exporter_enabled {
-        // file writer layer to collect all levels of logs, mostly useful for debugging the logging setup
+    if config.file_traces_exporter_enabled {
+        // file writer layer to collect all levels of traces, mostly useful for debugging the tracing setup
         let file_appender = tracing_appender::rolling::minutely("./logs", "trace");
         let (file_writer, _guard) = tracing_appender::non_blocking(file_appender);
         file_writer_layer = Option::from(
@@ -84,80 +158,53 @@ fn init_otel_subscribers() {
         );
     }
 
-    let mut std_stream_log_subscriber_layer = None;
-    if config.std_stream_logs_traces_exporter_enabled {
-        // stdout/stderr log layer for non-tracing logs to be collected into ElasticSearch or similar
-        let _std_stream_log_subscriber_layer =
-            BunyanFormattingLayer::new(SERVICE_NAME.into(), std::io::stderr)
-                .with_filter(LevelFilter::INFO);
-        std_stream_log_subscriber_layer = Option::from(_std_stream_log_subscriber_layer);
+    let mut std_stream_traces_subscriber_layer = None;
+    if config.std_stream_traces_exporter_enabled {
+        // stdout/stderr layer to collect all levels of traces, mostly useful for debugging the tracing setup
+        let _std_stream_log_subscriber_layer = tracing_bunyan_formatter::BunyanFormattingLayer::new(
+            SERVICE_NAME.into(),
+            std::io::stderr,
+        );
+        std_stream_traces_subscriber_layer = Option::from(_std_stream_log_subscriber_layer);
     }
 
-    let mut otel_log_trace_subscriber_layer = None;
-    if config.otel_collector_logs_traces_exporter_enabled {
-        // init otel tracing propogator; see more about opentelemetry propagators here:
-        // https://github.com/open-telemetry/opentelemetry-specification/blob/main/specification/context/api-propagators.md
-        opentelemetry::global::set_text_map_propagator(
-            opentelemetry_sdk::propagation::TraceContextPropagator::new(),
-        );
-
-        // init otel tracing pipeline
-        // https://docs.rs/opentelemetry-otlp/latest/opentelemetry_otlp/#kitchen-sink-full-configuration
-        // this pipeline will log connection errors to stderr if it cannot reach the collector endpoint
-        let otel_trace_pipeline = opentelemetry_otlp::new_pipeline()
+    let mut otel_trace_subscriber_layer = None;
+    if config.otel_collector_traces_exporter_enabled {
+        let tracer = opentelemetry_otlp::new_pipeline()
             .tracing()
-            .with_exporter(opentelemetry_otlp::new_exporter().tonic()) // default endpoint http://localhost:4317
+            .with_exporter(
+                opentelemetry_otlp::new_exporter()
+                    .tonic()
+                    .with_endpoint("http://localhost:4317"), // default is http://localhost:4317; explicit over implicit
+            )
             .with_trace_config(
                 opentelemetry_sdk::trace::config().with_resource(init_otel_resource()),
-            );
-
-        // init otel tracer
-        // use this stdout pipeline instead to debug or view the opentelemetry data without a collector
-        // let otel_tracer = opentelemetry_stdout::new_pipeline().install_simple();
-        let otel_tracer = otel_trace_pipeline
+            )
             .install_batch(opentelemetry_sdk::runtime::Tokio)
             .unwrap();
-        otel_log_trace_subscriber_layer =
-            Option::from(tracing_opentelemetry::layer().with_tracer(otel_tracer));
+        otel_trace_subscriber_layer = Option::from(layer().with_tracer(tracer));
     }
 
-    let mut otel_metrics_subscriber_layer = None;
-    if config.otel_collector_metrics_exporter_enabled {
-        // init otel metrics pipeline
-        // https://docs.rs/opentelemetry-otlp/latest/opentelemetry_otlp/#kitchen-sink-full-configuration
-        // this configuration interface is annoyingly slightly different from the tracing one
-        let otel_metrics_pipeline = opentelemetry_otlp::new_pipeline()
-            .metrics(opentelemetry_sdk::runtime::Tokio)
-            .with_exporter(opentelemetry_otlp::new_exporter().tonic()) // default endpoint http://localhost:4317
-            .with_resource(init_otel_resource())
-            .build()
-            .unwrap();
-        // the call to build() registers the global meter provider so we do not need to
-        // register a subscriber layer the way we do with the tracing/logging SDK,
-        // but we can do it here for consistency's sake and maybe one day the OTEL SDKs
-        // will have more consistent configuration interfaces
-        otel_metrics_subscriber_layer = Option::from(tracing_opentelemetry::MetricsLayer::new(
-            otel_metrics_pipeline,
-        ));
-    }
-
-    let telemetry_subscriber = Registry::default()
+    // this is only needed because we optionally want multiple tracing subscribers;
+    // otherwise we would only need the opentelemetry_otlp::new_pipeline().tracing() setup
+    let telemetry_subscriber = tracing_subscriber::Registry::default()
         .with(file_writer_layer)
-        .with(JsonStorageLayer) // stores fields across spans for the bunyan formatter
-        .with(std_stream_log_subscriber_layer)
-        .with(otel_log_trace_subscriber_layer)
-        .with(otel_metrics_subscriber_layer);
+        .with(tracing_bunyan_formatter::JsonStorageLayer) // stores fields across spans for the bunyan formatter
+        .with(std_stream_traces_subscriber_layer)
+        .with(otel_trace_subscriber_layer);
     tracing::subscriber::set_global_default(telemetry_subscriber).unwrap();
 }
 
 #[tokio::main]
 async fn main() {
-    init_otel_subscribers();
+    let config = envy::from_env::<Config>().unwrap();
 
-    // init our otel metrics middleware
-    let global_meter = opentelemetry_api::global::meter(Cow::from(SERVICE_NAME));
+    init_otel(&config);
+
+    // init our otel metrics middleware to record HTTP server metrics
+    let global_meter_provider = opentelemetry::global::meter_provider();
     let otel_metrics_service_layer = tower_otel_http_metrics::HTTPMetricsLayerBuilder::new()
-        .with_meter(global_meter)
+        .with_meter(global_meter_provider.meter(Cow::from(SERVICE_NAME)))
         .build()
         .unwrap();
 
@@ -178,17 +225,29 @@ async fn main() {
         ))
         .layer(otel_metrics_service_layer);
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:5000").await.unwrap();
-    info!("starting {}...", SERVICE_NAME);
+    let listener = tokio::net::TcpListener::bind(&config.server_addr)
+        .await
+        .unwrap();
+    println!("starting {} on {}...", SERVICE_NAME, &config.server_addr);
 
     let server = axum::serve(listener, app);
+    let shutdown_handler = server.with_graceful_shutdown(shutdown_signal());
 
-    if let Err(err) = server.await {
+    if let Err(err) = shutdown_handler.await {
         eprintln!("server error: {}", err);
     }
+
+    opentelemetry::global::shutdown_tracer_provider();
+    opentelemetry::global::shutdown_logger_provider();
+    opentelemetry::global::shutdown_logger_provider();
 }
 
-#[instrument(skip(headers, bytes))]
+async fn shutdown_signal() {
+    let _ = signal::ctrl_c().await;
+    println!("ctrl-c received, shutting down.");
+}
+
+#[instrument(level = "trace", skip(bytes))]
 pub async fn echo(
     matched_path: MatchedPath,
     method: Method,
@@ -196,11 +255,19 @@ pub async fn echo(
     bytes: Bytes,
 ) -> Bytes {
     let parsed_req_headers = parse_request_headers(headers);
-    // method and headers get logged by the instrument macro; this is just an example
-    info!(
+    // method and headers get recorded on the trace by the instrument macro; this is just an example
+    // see https://docs.rs/tracing/latest/tracing/#recording-fields
+    tracing_info!(
         request.endpoint = String::from(matched_path.as_str()),
         request.method = %method,
         request.headers = ?parsed_req_headers,
+        "parsed request headers",
+    );
+    // kv logging example - slightly different syntax - see https://docs.rs/log/latest/log/kv/
+    log_info!(
+        "request.endpoint" = matched_path.as_str(),
+        "request.method" = method.as_str(),
+        "request.headers":? = parsed_req_headers;
         "parsed request headers",
     );
     bytes
@@ -213,7 +280,7 @@ struct EchoJSONResponse {
     body: Value,
 }
 
-#[instrument(skip(headers, body))]
+#[instrument(level = "trace", skip(body))]
 async fn echo_json(
     matched_path: MatchedPath,
     method: Method,
@@ -222,11 +289,19 @@ async fn echo_json(
 ) -> Json<EchoJSONResponse> {
     let req_method = method.to_string();
     let parsed_req_headers = parse_request_headers(headers);
-    // method and headers get logged by the instrument macro; this is just an example
-    info!(
+    // method and headers get recorded on the trace by the instrument macro; this is just an example
+    // see https://docs.rs/tracing/latest/tracing/#recording-fields
+    tracing_info!(
         request.endpoint = String::from(matched_path.as_str()),
-        request.method = req_method,
+        request.method = %method,
         request.headers = ?parsed_req_headers,
+        "parsed request headers",
+    );
+    // kv logging example - slightly different syntax - see https://docs.rs/log/latest/log/kv/
+    log_info!(
+        "request.endpoint" = matched_path.as_str(),
+        "request.method" = method.as_str(),
+        "request.headers":? = parsed_req_headers;
         "parsed request headers",
     );
 

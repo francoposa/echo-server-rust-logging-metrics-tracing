@@ -12,18 +12,22 @@ services:
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
       #      - OTEL_EXPORTER_OTLP_ENDPOINT=http://grafana-agent:4317
       - OTEL_METRIC_EXPORT_INTERVAL=10000
+    #    network_mode: host
     networks:
       echo-server:
     ports:
-      - "5000:5000"
+      - "8080:8080"
 
   otel-collector:
     image: otel/opentelemetry-collector-contrib:latest
     container_name: otel-collector
     command:
       - "--config=/etc/otel-collector-config.yaml"
+    #    network_mode: host
     networks:
       echo-server:
+    ports:
+      - "4317:4317"
     volumes:
       - ./config/otel-collector-config.yaml:/etc/otel-collector-config.yaml
 
@@ -34,6 +38,7 @@ services:
     command: run --server.http.listen-addr=0.0.0.0:12345 /etc/agent/config.river
     environment:
       - AGENT_MODE=flow
+    #    network_mode: host
     networks:
       echo-server:
     ports:
@@ -56,6 +61,7 @@ services:
     image: grafana/mimir:latest
     container_name: mimir
     command: [ "-config.file=/mimir/config/mimir.yaml" ]
+    #    network_mode: host
     networks:
       echo-server:
     ports:
@@ -69,20 +75,10 @@ services:
     environment:
       - GF_AUTH_ANONYMOUS_ENABLED=true
       - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+    #    network_mode: host
     networks:
       echo-server:
     ports:
       - "3000:3000"
     volumes:
       - ./config/grafana-datasource-mimir.yaml:/etc/grafana/provisioning/datasources/mimir.yaml
-
-#  jaeger:
-#    image: jaegertracing/all-in-one:latest  # must be >=1.35 for OTLP support
-#    container_name: jaeger
-#    environment:
-#      - COLLECTOR_OTLP_ENABLED=true
-#    network_mode: host
-#    #    ports:
-#    #      - 4317:4317
-#    #      - 4318:4318
-#    #      - 16686:16686

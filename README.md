@@ -2,7 +2,11 @@
 
 ## Configuration
 
-### OTEl Official Configuration
+### Server Configuration
+
+* `SERVER_ADDR` - server bind address in `host:port` format; defaults to `0.0.0.0:8080`.
+
+### OTEL Instrumentation Official Configuration
 
 OpenTelemetry library configuration is done with the standardized environment variables listed here
 [here](https://opentelemetry.io/docs/concepts/sdk-configuration/) and
@@ -26,9 +30,11 @@ Of particular interest are:
 I have also added the options to enable or disable stdout/stderr logging, file logging, (logs + traces) exporting, and
 metrics exporting:
 
-* `FILE_LOGS_TRACES_EXPORTER_ENABLED`: default `false`
-* `STD_STREAM_LOGS_TRACES_EXPORTER_ENABLED`: default `false`
-* `OTEL_COLLECTOR_LOGS_TRACES_EXPORTER_ENABLED`: default `true`
+* `FILE_TRACES_EXPORTER_ENABLED`: default `false`
+* `STD_STREAM_LOGS_EXPORTER_ENABLED`: default `false`
+* `STD_STREAM_TRACES_EXPORTER_ENABLED`: default `false`
+* `OTEL_COLLECTOR_LOGS_EXPORTER_ENABLED`: default `true`
+* `OTEL_COLLECTOR_TRACES_EXPORTER_ENABLED`: default `true`
 * `OTEL_COLLECTOR_METRICS_EXPORTER_ENABLED`: default `true`
 
 Environment variable names and defaults subject to change.
@@ -48,13 +54,13 @@ In the `development` directory, bring up the echo server with:
 docker-compose up -d echo-server  # add the --build option to include any local changes
 ```
 
-The Docker Compose configuration binds the container port to the host network's port 5000.
-Hit either the vanilla echo endpoint at `localhost:5000` or the json echo endpoint at `localhost:5000/json`:
+The Docker Compose configuration binds the container port to the host network's port 8080.
+Hit either the vanilla echo endpoint at `localhost:8080` or the json echo endpoint at `localhost:8080/json`:
 
 ```shell
-curl -i -X GET localhost:5000/ -d 'hello world'
+curl -i -X GET localhost:8080/ -d 'hello world'
 
-curl -i -X GET --header "content-type: application/json" localhost:5000/json -d '{"hello": "world"}'
+curl -i -X GET --header "content-type: application/json" localhost:8080/json -d '{"hello": "world"}'
 ```
 
 #### Telemetry Collectors

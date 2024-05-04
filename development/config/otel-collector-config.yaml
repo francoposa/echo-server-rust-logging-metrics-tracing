@@ -14,6 +14,8 @@ receivers:
 exporters:
   logging:
     loglevel: debug
+  debug:
+    verbosity: detailed
   otlphttp/grafana-cloud:
     # see https://grafana.com/docs/grafana-cloud/send-data/otlp/send-data-otlp/
     # for how to get your endpoint, username, and password (cloud access policy token)
@@ -62,10 +64,10 @@ service:
   pipelines:
     metrics:
       receivers: [ otlp ]
-      exporters: [ otlphttp/mimir-monolithic-mode-docker-compose ]
+      exporters: [ debug, otlphttp/mimir-monolithic-mode-docker-compose ]
     traces:
       receivers: [ otlp ]
-      exporters: [ logging ]
+      exporters: [ debug ]
     logs:
       receivers: [ otlp ]
-      exporters: [ logging ]
+      exporters: [ debug ]
