@@ -35,6 +35,9 @@ struct Config {
     #[serde(default = "server_addr")]
     server_addr: String,
 
+    #[serde(default = "base_url_path_v0")]
+    base_url_path: String,
+
     #[serde(default = "file_exporter_enabled")]
     file_traces_exporter_enabled: bool,
 
@@ -56,6 +59,10 @@ struct Config {
 
 fn server_addr() -> String {
     String::from("0.0.0.0:8080")
+}
+
+fn base_url_path_v0() -> String {
+    String::from("/api/v0")
 }
 
 fn file_exporter_enabled() -> bool {
@@ -211,13 +218,15 @@ async fn main() {
     // init CORS layer
     let cors = CorsLayer::permissive();
 
+    let echo_path = &format!("{}/echo", &config.base_url_path);
+    let echo_json_path = &format!("{}/echo/json", &config.base_url_path);
     let app = Router::new()
-        .route("/", get(echo))
-        .route("/", post(echo))
-        .route("/", put(echo))
-        .route("/json", get(echo_json))
-        .route("/json", post(echo_json))
-        .route("/json", put(echo_json))
+        .route(echo_path, get(echo))
+        .route(echo_path, post(echo))
+        .route(echo_path, put(echo))
+        .route(echo_json_path, get(echo_json))
+        .route(echo_json_path, post(echo_json))
+        .route(echo_json_path, put(echo_json))
         .layer(cors)
         .layer(TraceLayer::new(
             // by default the tower http trace layer only classifies 5xx errors as failures

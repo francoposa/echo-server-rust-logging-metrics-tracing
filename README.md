@@ -5,6 +5,7 @@
 ### Server Configuration
 
 * `SERVER_ADDR` - server bind address in `host:port` format; defaults to `0.0.0.0:8080`.
+* `BASE_URL_PATH` - URL path prefix to be applied to all public API endpoints; defaults to `/api/v0`
 
 ### OTEL Instrumentation Official Configuration
 
@@ -58,9 +59,9 @@ The Docker Compose configuration binds the container port to the host network's 
 Hit either the vanilla echo endpoint at `localhost:8080` or the json echo endpoint at `localhost:8080/json`:
 
 ```shell
-curl -i -X GET localhost:8080/ -d 'hello world'
+curl -i -X GET localhost:8080/api/v0/echo -d 'hello world'
 
-curl -i -X GET --header "content-type: application/json" localhost:8080/json -d '{"hello": "world"}'
+curl -i -X GET --header "content-type: application/json" localhost:8080/api/v0/echo/json -d '{"hello": "world"}'
 ```
 
 #### Telemetry Collectors
