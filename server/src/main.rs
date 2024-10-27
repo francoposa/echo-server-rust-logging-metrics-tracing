@@ -30,6 +30,7 @@ use {tower_otel_http_metrics, tracing};
 
 use opentelemetry_appender_tracing::layer;
 use opentelemetry_sdk::metrics::reader::DefaultTemporalitySelector;
+use tokio::io::AsyncWriteExt;
 use tracing::error;
 use tracing::instrument::WithSubscriber;
 use tracing_subscriber::prelude::*;
@@ -249,14 +250,6 @@ fn init_metrics() -> opentelemetry_sdk::metrics::SdkMeterProvider {
         .with_resource(init_otel_resource().clone())
         .build();
 
-    // let meter_provider = opentelemetry_otlp::new_pipeline()
-    //     .metrics(opentelemetry_sdk::runtime::Tokio)
-    //     .with_exporter(opentelemetry_otlp::new_exporter().tonic())
-    //     .with_resource(init_otel_resource().clone())
-    //     .with_period(Duration::from_secs(10))
-    //     .build() // build registers the global meter provider
-    //     .unwrap();
-
     opentelemetry::global::set_meter_provider(meter_provider.clone());
     meter_provider
 }
@@ -289,43 +282,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // init_otel(&config);
 
-    let sdk_meter_provider = init_metrics();
-    // let sdk_tracer_provider = init_traces();
-    // let tracer = sdk_tracer_provider.tracer_builder(SERVICE_NAME).build();
-    // let otel_trace_subscriber_layer = layer().with_tracer(tracer);
-    //
-    // // let std_stream_log_provider = init_logs();
-    // // let std_stream_log_layer = layer::OpenTelemetryTracingBridge::new(&std_stream_log_provider);
-    // // tracing_subscriber::registry().with(stdout_loglayer).init();
-    //
-    // let subscriber = tracing_subscriber::FmtSubscriber::new();
-    //
-    // // stdout/stderr layer to collect all levels of traces, mostly useful for debugging the tracing setup
-    // let _std_stream_log_subscriber_layer =
-    //     tracing_bunyan_formatter::BunyanFormattingLayer::new(SERVICE_NAME.into(), std::io::stderr);
-    //
-    // // file writer layer to collect all levels of traces, mostly useful for debugging the tracing setup
-    // let file_appender = tracing_appender::rolling::minutely("./logs", "trace");
-    // let (file_writer, _guard) = tracing_appender::non_blocking(file_appender);
-    // let file_writer_layer = tracing_subscriber::fmt::layer()
-    //     .json()
-    //     .with_writer(file_writer);
-    //
-    // // this is only needed because we optionally want multiple tracing subscribers;
-    // // otherwise we would only need the opentelemetry_otlp::new_pipeline().tracing() setup
-    // let telemetry_subscriber = tracing_subscriber::Registry::default()
-    //     .with(_std_stream_log_subscriber_layer)
-    //     .with(file_writer_layer)
-    //     .with(tracing_bunyan_formatter::JsonStorageLayer) // stores fields across spans for the bunyan formatter
-    //     // .with(std_stream_traces_subscriber_layer)
-    //     .with(otel_trace_subscriber_layer);
-    // tracing::subscriber::set_global_default(telemetry_subscriber).unwrap();
-
-    // init our otel metrics middleware to record HTTP server metrics
+    let meter_provider = init_metrics();
+    let meter = meter_provider.meter(SERVICE_NAME);
+    // this "layer" is for a tower service middleware layer not a tracing subscriber layer
     let otel_metrics_service_layer = tower_otel_http_metrics::HTTPMetricsLayerBuilder::new()
-        .with_meter(sdk_meter_provider.meter(SERVICE_NAME))
+        .with_meter(meter)
         .build()
         .unwrap();
+
+    let tracer_provider = init_traces();
+    let tracer = tracer_provider.tracer_builder(SERVICE_NAME).build();
+    let otel_trace_subscriber_layer = tracing_opentelemetry::OpenTelemetryLayer::new(tracer);
+    let otel_tracing_subscriber =
+        tracing_subscriber::Registry::default().with(otel_trace_subscriber_layer);
+    tracing::subscriber::set_global_default(otel_tracing_subscriber).unwrap();
 
     // init CORS layer
     let cors = CorsLayer::permissive();
@@ -358,9 +328,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("server error: {}", err);
     }
 
-    // opentelemetry::global::shutdown_tracer_provider();
-    sdk_meter_provider.shutdown().unwrap();
-    // opentelemetry::global::shutdown_logger_provider();
+    tracer_provider.shutdown().await;
+    meter_provider.shutdown().await;
 
     Ok(())
 }
