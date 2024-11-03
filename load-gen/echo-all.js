@@ -1,9 +1,11 @@
 import http from 'k6/http';
+import {sleep} from 'k6';
+
 
 // run for an hour in fluctuating 1-minute stages
 let stages = [];
 for (let i = 0; i < 60; i++) {
-    stages.push({duration: '1m', target: Math.floor(Math.random() * 100)});
+    stages.push({duration: '1m', target: Math.floor(Math.random() * 10)});
 }
 
 export const options = {
@@ -11,8 +13,8 @@ export const options = {
 };
 
 // TODO get these from environment
-const echoDefaultEndpoint = 'http://echo-server:8080'
-const echoJSONEndpoint = 'http://echo-server:8080/json'
+const echoDefaultEndpoint = 'http://echo-server:8080/api/v0/echo'
+const echoJSONEndpoint = 'http://echo-server:8080/api/v0/echo/json'
 
 const endpoints = [
     echoDefaultEndpoint,
@@ -48,4 +50,5 @@ export default function () {
     };
 
     http.request(method, url, payload, params);
+    sleep(Math.random() * 10);
 }

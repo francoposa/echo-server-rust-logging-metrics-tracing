@@ -9,7 +9,9 @@ use envy;
 use log::info as log_info;
 use opentelemetry::metrics::MeterProvider;
 use opentelemetry::trace::TracerProvider;
+use opentelemetry_appender_tracing;
 use opentelemetry_otlp;
+use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -19,10 +21,9 @@ use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tower_otel_http_metrics;
 use tracing::{info as tracing_info, instrument};
+use tracing_subscriber;
 use tracing_subscriber::layer::SubscriberExt;
-
-use opentelemetry_appender_tracing;
-use opentelemetry_otlp::WithExportConfig;
+use tracing_subscriber::Layer;
 
 const SERVICE_NAME: &str = "echo-server-rust";
 
@@ -37,7 +38,7 @@ struct Config {
     #[serde(default = "std_stream_exporter_enabled")]
     std_stream_logs_exporter_enabled: bool,
 
-    #[serde(default = "otel_collector_exporter_enabled")]
+    #[serde(default = "std_stream_exporter_enabled")]
     std_stream_metrics_exporter_enabled: bool,
 
     #[serde(default = "std_stream_exporter_enabled")]
@@ -173,8 +174,24 @@ fn init_traces(
             .build_span_exporter()
             .unwrap(); // default is http://localhost:4317; explicit over implicit
 
-        tracer_provider_builder = tracer_provider_builder
-            .with_batch_exporter(otlp_trace_exporter, opentelemetry_sdk::runtime::Tokio);
+        // using the batch processor builder and enabling it with with_span_processor
+        // to configure exporter settings like batch size, timeout, etc.
+        // which cannot be set when using with_batch_exporter.
+        let batch_processor = opentelemetry_sdk::trace::BatchSpanProcessor::builder(
+            otlp_trace_exporter,
+            opentelemetry_sdk::runtime::Tokio,
+        )
+        .with_batch_config(
+            opentelemetry_sdk::trace::BatchConfigBuilder::default()
+                .with_scheduled_delay(Duration::from_secs(10))
+                .build(),
+        )
+        .build();
+
+        tracer_provider_builder = tracer_provider_builder.with_span_processor(batch_processor);
+
+        // tracer_provider_builder = tracer_provider_builder
+        //     .with_batch_exporter(otlp_trace_exporter, opentelemetry_sdk::runtime::Tokio);
     }
 
     let tracer_provider = tracer_provider_builder
@@ -207,7 +224,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let log_provider = init_logs(&config, otel_resource.clone());
     let otel_log_subscriber_layer =
-        opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge::new(&log_provider);
+        opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge::new(&log_provider)
+            .with_filter(tracing_subscriber::filter::LevelFilter::INFO);
 
     let tracer_provider = init_traces(&config, otel_resource.clone());
     let tracer = tracer_provider.tracer_builder(SERVICE_NAME).build();
