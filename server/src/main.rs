@@ -121,7 +121,6 @@ fn init_metrics(
     }
 
     let meter_provider = meter_provider_builder.with_resource(resource).build();
-    opentelemetry::global::set_meter_provider(meter_provider.clone());
     meter_provider
 }
 
@@ -182,7 +181,6 @@ fn init_traces(
         .with_config(opentelemetry_sdk::trace::Config::default().with_resource(resource))
         .build();
 
-    opentelemetry::global::set_tracer_provider(tracer_provider.clone());
     tracer_provider
 }
 
@@ -205,17 +203,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_meter(meter)
         .build()
         .unwrap();
+    opentelemetry::global::set_meter_provider(meter_provider);
 
     let log_provider = init_logs(&config, otel_resource.clone());
-    let otel_log_layer =
+    let otel_log_subscriber_layer =
         opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge::new(&log_provider);
 
     let tracer_provider = init_traces(&config, otel_resource.clone());
     let tracer = tracer_provider.tracer_builder(SERVICE_NAME).build();
     let otel_trace_subscriber_layer = tracing_opentelemetry::OpenTelemetryLayer::new(tracer);
     let otel_tracing_subscriber = tracing_subscriber::Registry::default()
-        .with(otel_log_layer)
+        .with(otel_log_subscriber_layer)
         .with(otel_trace_subscriber_layer);
+
+    opentelemetry::global::set_tracer_provider(tracer_provider);
     tracing::subscriber::set_global_default(otel_tracing_subscriber).unwrap();
 
     // init CORS layer
@@ -248,10 +249,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Err(err) = shutdown_handler.await {
         eprintln!("server error: {}", err);
     }
-
-    let _ = meter_provider.shutdown();
-    let _ = log_provider.shutdown();
-    let _ = tracer_provider.shutdown();
 
     Ok(())
 }

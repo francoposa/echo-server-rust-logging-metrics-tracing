@@ -28,11 +28,10 @@ Of particular interest are:
 
 ### Additional Configuration
 
-I have also added the options to enable or disable stdout/stderr logging, file logging, (logs + traces) exporting, and
-metrics exporting:
+I have also added the options to enable or disable stdout and OTLP exporting for each of logs, metrics, and traces.
 
-* `FILE_TRACES_EXPORTER_ENABLED`: default `false`
 * `STD_STREAM_LOGS_EXPORTER_ENABLED`: default `false`
+* `STD_STREAM_METRICS_EXPORTER_ENABLED`: default `false`
 * `STD_STREAM_TRACES_EXPORTER_ENABLED`: default `false`
 * `OTEL_COLLECTOR_LOGS_EXPORTER_ENABLED`: default `true`
 * `OTEL_COLLECTOR_TRACES_EXPORTER_ENABLED`: default `true`
@@ -40,8 +39,9 @@ metrics exporting:
 
 Environment variable names and defaults subject to change.
 
-File and stdout/stderr exporters are still OTEL-structured logs and traces,
-just not using the OTEL Rust exporter SDKs which are focused on exports over the wire to collectors.
+The stdout exporter prints the telemetry signals to the console
+in the same human-readable format as the OTEL Collector's debug exporter
+It is intended only for debugging and development purposes only.
 
 ## Usage
 
@@ -93,7 +93,7 @@ Access the Grafana UI at `localhost:3000/explore` and view the metrics with a Pr
 rate(http_server_request_duration_count[1m])
 ```
 
-### Ingesting and Visualizing Traces
+#### Ingesting and Visualizing Traces
 
 The easiest way to view traces is with the Jaeger all-in-one docker image.
 Jaeger added support for OpenTelemetry-formatted traces in v1.35
@@ -116,4 +116,9 @@ Hyper.
 
 ## Development
 
-Compiling requires the protobuf compiler packages, usually called `protobuf-devel` or similar in Linux repos
+Compiling outside of Docker requires protobuf compiler packages to be installed on the operating system.
+The packages are generally called `protobuf`, `protobuf-devel`, or similar in Linux repos
+
+---
+
+Created by Franco Posa (franco @ [francoposa.io](https://francoposa.io))
