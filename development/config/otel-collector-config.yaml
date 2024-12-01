@@ -12,8 +12,6 @@ receivers:
         endpoint: 0.0.0.0:4317
 
 exporters:
-  logging:
-    loglevel: debug
   debug:
     verbosity: detailed
   otlphttp/grafana-cloud:
