@@ -62,7 +62,7 @@ service:
   pipelines:
     metrics:
       receivers: [ otlp ]
-      exporters: [ debug, otlphttp/mimir-monolithic-mode-docker-compose ]
+      exporters: [ debug, otlphttp/mimir-monolithic-mode-local ]
     traces:
       receivers: [ otlp ]
       exporters: [ debug ]

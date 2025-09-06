@@ -11,7 +11,6 @@ use opentelemetry::metrics::MeterProvider;
 use opentelemetry::trace::TracerProvider;
 use opentelemetry_appender_tracing;
 use opentelemetry_otlp;
-use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -120,80 +119,76 @@ fn init_metrics(
 }
 
 // ************************************ LOGS ************************************
-// fn init_logs(
-//     config: &Config,
-//     resource: opentelemetry_sdk::Resource,
-// ) -> opentelemetry_sdk::logs::LoggerProvider {
-//     let mut log_provider_builder = opentelemetry_sdk::logs::LoggerProvider::builder();
-//
-//     if config.std_stream_logs_exporter_enabled {
-//         let stdout_log_exporter = opentelemetry_stdout::LogExporter::default();
-//
-//         log_provider_builder = log_provider_builder.with_simple_exporter(stdout_log_exporter);
-//     }
-//
-//     if config.otel_collector_logs_exporter_enabled {
-//         let otlp_log_exporter = opentelemetry_otlp::LogExporter::builder()
-//             .with_tonic()
-//             .with_endpoint("http://localhost:4317")
-//             .build()
-//             .unwrap();
-//
-//         log_provider_builder = log_provider_builder
-//             .with_batch_exporter(otlp_log_exporter, opentelemetry_sdk::runtime::Tokio);
-//     }
-//
-//     let log_provider = log_provider_builder.with_resource(resource).build();
-//     log_provider
-// }
+fn init_logs(
+    config: &Config,
+    resource: opentelemetry_sdk::Resource,
+) -> opentelemetry_sdk::logs::SdkLoggerProvider {
+    let mut log_provider_builder = opentelemetry_sdk::logs::SdkLoggerProvider::builder();
+
+    if config.std_stream_logs_exporter_enabled {
+        let stdout_log_exporter = opentelemetry_stdout::LogExporter::default();
+
+        log_provider_builder = log_provider_builder.with_simple_exporter(stdout_log_exporter);
+    }
+
+    if config.otel_collector_logs_exporter_enabled {
+        let otlp_log_exporter = opentelemetry_otlp::LogExporter::builder()
+            .with_tonic()
+            .build()
+            .unwrap();
+
+        log_provider_builder = log_provider_builder.with_batch_exporter(otlp_log_exporter);
+    }
+
+    let log_provider = log_provider_builder.with_resource(resource).build();
+    log_provider
+}
 
 // ************************************ TRACES ************************************
-// fn init_traces(
-//     config: &Config,
-//     resource: opentelemetry_sdk::Resource,
-// ) -> opentelemetry_sdk::trace::TracerProvider {
-//     let mut tracer_provider_builder = opentelemetry_sdk::trace::TracerProvider::builder();
-//
-//     if config.std_stream_traces_exporter_enabled {
-//         let std_stream_trace_exporter = opentelemetry_stdout::SpanExporter::default();
-//
-//         tracer_provider_builder =
-//             tracer_provider_builder.with_simple_exporter(std_stream_trace_exporter);
-//     }
-//
-//     if config.otel_collector_traces_exporter_enabled {
-//         let otlp_trace_exporter = opentelemetry_otlp::SpanExporter::builder()
-//             .with_tonic()
-//             .with_endpoint("http://localhost:4317")
-//             .build()
-//             .unwrap(); // default is http://localhost:4317; explicit over implicit
-//
-//         // using the batch processor builder and enabling it with with_span_processor
-//         // to configure exporter settings like batch size, timeout, etc.
-//         // which cannot be set when using with_batch_exporter.
-//         let batch_processor = opentelemetry_sdk::trace::BatchSpanProcessor::builder(
-//             otlp_trace_exporter,
-//             opentelemetry_sdk::runtime::Tokio,
-//         )
-//         .with_batch_config(
-//             opentelemetry_sdk::trace::BatchConfigBuilder::default()
-//                 .with_scheduled_delay(Duration::from_secs(10))
-//                 .build(),
-//         )
-//         .build();
-//
-//         tracer_provider_builder = tracer_provider_builder.with_span_processor(batch_processor);
-//
-//         // tracer_provider_builder = tracer_provider_builder
-//         //     .with_batch_exporter(otlp_trace_exporter, opentelemetry_sdk::runtime::Tokio);
-//     }
-//
-//     let tracer_provider = tracer_provider_builder
-//         .with_config(opentelemetry_sdk::trace::Config::default().with_resource(resource))
-//         .build();
-//
-//     tracer_provider
-// }
+fn init_traces(
+    config: &Config,
+    resource: opentelemetry_sdk::Resource,
+) -> opentelemetry_sdk::trace::SdkTracerProvider {
+    // init otel tracing propogator; see more about opentelemetry propagators here:
+    // https://github.com/open-telemetry/opentelemetry-specification/blob/main/specification/context/api-propagators.md
+    opentelemetry::global::set_text_map_propagator(
+        opentelemetry_sdk::propagation::TraceContextPropagator::new(),
+    );
+
+    let mut tracer_provider_builder = opentelemetry_sdk::trace::SdkTracerProvider::builder();
+
+    if config.std_stream_traces_exporter_enabled {
+        let std_stream_trace_exporter = opentelemetry_stdout::SpanExporter::default();
+
+        tracer_provider_builder =
+            tracer_provider_builder.with_simple_exporter(std_stream_trace_exporter);
+    }
+
+    if config.otel_collector_traces_exporter_enabled {
+        let otlp_trace_exporter = opentelemetry_otlp::SpanExporter::builder()
+            .with_tonic()
+            .build()
+            .unwrap();
+
+        // using the batch processor builder and enabling it with with_span_processor
+        // to configure exporter settings like batch size, timeout, etc.
+        // which cannot be set when using with_batch_exporter.
+        let batch_processor =
+            opentelemetry_sdk::trace::BatchSpanProcessor::builder(otlp_trace_exporter)
+                .with_batch_config(
+                    opentelemetry_sdk::trace::BatchConfigBuilder::default()
+                        .with_scheduled_delay(Duration::from_secs(10))
+                        .build(),
+                )
+                .build();
+
+        tracer_provider_builder = tracer_provider_builder.with_span_processor(batch_processor);
+    }
+
+    let tracer_provider = tracer_provider_builder.with_resource(resource).build();
+
+    tracer_provider
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -201,36 +196,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let otel_resource = init_otel_resource();
 
-    // init otel tracing propogator; see more about opentelemetry propagators here:
-    // https://github.com/open-telemetry/opentelemetry-specification/blob/main/specification/context/api-propagators.md
-    // opentelemetry::global::set_text_map_propagator(
-    //     opentelemetry_sdk::propagation::TraceContextPropagator::new(),
-    // );
-
     let meter_provider = init_metrics(&config, otel_resource.clone());
     opentelemetry::global::set_meter_provider(meter_provider.clone());
     let meter = meter_provider.meter(SERVICE_NAME);
 
-    // this "layer" is for a tower service middleware layer, not a tracing subscriber layer
+    // this layer a tower service middleware layer, not a tracing subscriber layer
     let otel_metrics_service_layer = tower_otel_http_metrics::HTTPMetricsLayerBuilder::builder()
         .with_meter(meter)
         .build()
         .unwrap();
 
-    // let log_provider = init_logs(&config, otel_resource.clone());
-    // let otel_log_subscriber_layer =
-    //     opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge::new(&log_provider)
-    //         .with_filter(tracing_subscriber::filter::LevelFilter::INFO);
-    //
-    // let tracer_provider = init_traces(&config, otel_resource.clone());
-    // let tracer = tracer_provider.tracer(SERVICE_NAME);
-    // let otel_trace_subscriber_layer = tracing_opentelemetry::OpenTelemetryLayer::new(tracer);
-    // let otel_tracing_subscriber = tracing_subscriber::Registry::default()
-    //     .with(otel_log_subscriber_layer)
-    //     .with(otel_trace_subscriber_layer);
-    //
-    // opentelemetry::global::set_tracer_provider(tracer_provider);
-    // tracing::subscriber::set_global_default(otel_tracing_subscriber).unwrap();
+    // bring logs and traces together with the tracing bridge
+    let log_provider = init_logs(&config, otel_resource.clone());
+    let otel_log_subscriber_layer =
+        opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge::new(&log_provider)
+            .with_filter(tracing_subscriber::filter::LevelFilter::INFO);
+
+    let tracer_provider = init_traces(&config, otel_resource.clone());
+    let tracer = tracer_provider.tracer(SERVICE_NAME);
+    let otel_trace_subscriber_layer = tracing_opentelemetry::OpenTelemetryLayer::new(tracer);
+    let otel_tracing_subscriber = tracing_subscriber::Registry::default()
+        .with(otel_log_subscriber_layer)
+        .with(otel_trace_subscriber_layer);
+
+    opentelemetry::global::set_tracer_provider(tracer_provider);
+    tracing::subscriber::set_global_default(otel_tracing_subscriber).unwrap();
 
     // init CORS layer
     let cors = CorsLayer::permissive();
