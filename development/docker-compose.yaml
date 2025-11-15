@@ -24,8 +24,8 @@ services:
     command:
       - "--config=/etc/otel-collector-config.yaml"
     network_mode: host
-#    networks:
-#      echo-server:
+    #    networks:
+    #      echo-server:
     ports:
       - "4317:4317"
     volumes:
@@ -54,7 +54,7 @@ services:
       - "/scripts/echo-all.js"
     network_mode: host
     #    networks:
-#      echo-server:
+    #      echo-server:
     volumes:
       - ../load-gen:/scripts
 
@@ -63,8 +63,8 @@ services:
     container_name: mimir
     command: [ "-config.file=/mimir/config/mimir.yaml" ]
     network_mode: host
-#    networks:
-#      echo-server:
+    #    networks:
+    #      echo-server:
     ports:
       - "8001:8001"
     volumes:
@@ -77,21 +77,21 @@ services:
       - GF_AUTH_ANONYMOUS_ENABLED=true
       - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
     network_mode: host
-#    networks:
-#      echo-server:
+    #    networks:
+    #      echo-server:
     ports:
       - "3000:3000"
     volumes:
       - ./config/grafana-datasource-mimir.yaml:/etc/grafana/provisioning/datasources/mimir.yaml
 
 
-#  jaeger:
-#    image: jaegertracing/all-in-one:latest  # must be >=1.35 for OTLP support
-#    container_name: jaeger
-#    environment:
-#      - COLLECTOR_OTLP_ENABLED=true
-#    network_mode: host
-#    ports:
-#      - 4317:4317
-#      - 4318:4318
-#      - 16686:16686
+  jaeger:
+    image: jaegertracing/all-in-one:latest  # must be >=1.35 for OTLP support
+    container_name: jaeger
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    network_mode: host
+    ports:
+      - 4317:4317
+      - 4318:4318
+      - 16686:16686
