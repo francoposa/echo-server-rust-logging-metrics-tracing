@@ -10,6 +10,7 @@ use log::info as log_info;
 use opentelemetry::metrics::MeterProvider;
 use opentelemetry::trace::TracerProvider;
 use opentelemetry_appender_tracing;
+use opentelemetry_instrumentation_tower;
 use opentelemetry_otlp;
 use opentelemetry_sdk;
 use serde::{Deserialize, Serialize};
@@ -18,7 +19,6 @@ use tokio::signal;
 use tower_http::classify::StatusInRangeAsFailures;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
-use tower_otel_http_metrics;
 use tracing::{info as tracing_info, instrument};
 use tracing_subscriber;
 use tracing_subscriber::layer::SubscriberExt;
@@ -70,7 +70,7 @@ fn std_stream_exporter_enabled() -> bool {
 }
 
 fn otel_collector_exporter_enabled() -> bool {
-    false
+    true
 }
 
 fn init_otel_resource() -> opentelemetry_sdk::Resource {
@@ -205,10 +205,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let meter = meter_provider.meter(SERVICE_NAME);
 
     // this layer a tower service middleware layer, not a tracing subscriber layer
-    let otel_metrics_service_layer = tower_otel_http_metrics::HTTPMetricsLayerBuilder::builder()
-        .with_meter(meter)
-        .build()
-        .unwrap();
+    let otel_metrics_service_layer =
+        opentelemetry_instrumentation_tower::HTTPMetricsLayerBuilder::builder()
+            .with_meter(meter)
+            .build()
+            .unwrap();
 
     // bring logs and traces together with the tracing bridge
     let log_provider = init_logs(&config, otel_resource.clone());
