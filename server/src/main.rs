@@ -61,12 +61,16 @@ fn base_url_path_v0() -> String {
     String::from("/api/v0")
 }
 
+fn enabled() -> bool {
+    true
+}
+
 fn std_stream_exporter_enabled() -> bool {
     false
 }
 
 fn otel_collector_exporter_enabled() -> bool {
-    true
+    false
 }
 
 fn init_otel_resource() -> opentelemetry_sdk::Resource {

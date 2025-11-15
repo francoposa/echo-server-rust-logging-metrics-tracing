@@ -52,8 +52,9 @@ services:
     command:
       - "run"
       - "/scripts/echo-all.js"
-    networks:
-      echo-server:
+    network_mode: host
+    #    networks:
+#      echo-server:
     volumes:
       - ../load-gen:/scripts
 
@@ -90,7 +91,7 @@ services:
 #    environment:
 #      - COLLECTOR_OTLP_ENABLED=true
 #    network_mode: host
-#        ports:
-#          - 4317:4317
-#          - 4318:4318
-#          - 16686:16686
+#    ports:
+#      - 4317:4317
+#      - 4318:4318
+#      - 16686:16686
