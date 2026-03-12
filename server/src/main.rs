@@ -213,6 +213,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .build()
             .unwrap();
 
+    let otel_layer = middleware::metrics::OTelLayer::new();
+
     // bring logs and traces together with the tracing bridge
     let log_provider = init_logs(&config, otel_resource.clone());
     let otel_log_subscriber_layer =
@@ -247,7 +249,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // by default the tower http trace layer only classifies 5xx errors as failures
             StatusInRangeAsFailures::new(400..=599).into_make_classifier(),
         ))
-        .layer(otel_metrics_service_layer);
+        .layer(otel_layer);
 
     let listener = tokio::net::TcpListener::bind(&config.server_addr)
         .await

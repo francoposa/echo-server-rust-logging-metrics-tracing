@@ -47,7 +47,7 @@ where
 {
     type Response = S::Response;
     type Error = S::Error;
-    type Future = ResponseFuture<S::Future>;
+    type Future = TimeoutResponseFuture<S::Future>;
 
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.inner.poll_ready(cx)
@@ -57,7 +57,7 @@ where
         let response_future = self.inner.call(request);
         let sleep = tokio::time::sleep(self.timeout);
 
-        ResponseFuture {
+        TimeoutResponseFuture {
             response_future,
             sleep,
         }
@@ -65,7 +65,7 @@ where
 }
 
 pin_project! {
-    pub struct ResponseFuture<F> {
+    pub struct TimeoutResponseFuture<F> {
         #[pin]
         response_future: F,
         #[pin]
@@ -73,7 +73,7 @@ pin_project! {
     }
 }
 
-impl<F, Error> Future for ResponseFuture<F>
+impl<F, Error> Future for TimeoutResponseFuture<F>
 where
     F: Future<Output = Result<Response<Body>, Error>>,
 {
