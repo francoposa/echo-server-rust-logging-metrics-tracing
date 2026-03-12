@@ -1,0 +1,5 @@
+{
+  "version": 0,
+  "root_name": "echo-server-logging-metrics-tracing",
+  "workspace_crates": {}
+}

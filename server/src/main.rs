@@ -1,3 +1,5 @@
+pub mod middleware;
+
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -239,6 +241,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route(echo_json_path, get(echo_json))
         .route(echo_json_path, post(echo_json))
         .route(echo_json_path, put(echo_json))
+        .layer(middleware::timeout::Timeout::new(Duration::from_secs(30)))
         .layer(cors)
         .layer(TraceLayer::new(
             // by default the tower http trace layer only classifies 5xx errors as failures
