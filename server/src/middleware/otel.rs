@@ -5,6 +5,7 @@ use axum::http::Response;
 use opentelemetry::global::{self};
 use opentelemetry::metrics::Meter;
 use opentelemetry::metrics::{Histogram, UpDownCounter};
+use opentelemetry::KeyValue;
 use opentelemetry_semantic_conventions as semconv;
 use pin_project_lite::pin_project;
 use std::borrow::Cow;
@@ -13,6 +14,7 @@ use std::pin::Pin;
 use std::string::String;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::time::Instant;
 use std::{fmt, result::Result};
 use tower_layer::Layer;
 use tower_service::Service;
@@ -192,6 +194,35 @@ impl<S> Layer<S> for OTelLayer {
     }
 }
 
+/// Request data extracted before the inner service call.
+/// This data is needed for metrics and span finalization after the response is received.
+struct RequestData {
+    // fields for the metric values
+    // https://opentelemetry.io/docs/specs/semconv/http/http-metrics/#metric-httpserverrequestduration
+    duration_start: Instant,
+    // https://opentelemetry.io/docs/specs/semconv/http/http-metrics/#metric-httpserverrequestbodysize
+    req_body_size: Option<u64>,
+
+    // fields for metric labels
+    protocol_name_kv: KeyValue,
+    protocol_version_kv: KeyValue,
+    url_scheme_kv: KeyValue,
+    method_kv: KeyValue,
+    route_kv_opt: Option<KeyValue>,
+
+    // Custom attributes from request
+    custom_request_attributes: Vec<KeyValue>,
+}
+
+pin_project! {
+    pub struct OTelResponseFuture<F> {
+        #[pin]
+        request_data: RequestData,
+        #[pin]
+        inner_response_future: F,
+    }
+}
+
 impl<S, Request> Service<Request> for OTelService<S>
 where
     S: Service<Request, Response = Response<Body>>,
@@ -205,34 +236,38 @@ where
     }
 
     fn call(&mut self, request: Request) -> Self::Future {
-        let response_future = self.inner_service.call(request);
+        let duration_start = Instant::now();
 
-        OTelResponseFuture { response_future }
+        OTelResponseFuture {
+            request_data: RequestData {
+                duration_start,
+                req_body_size: None,
+                protocol_name_kv: KeyValue::new(NETWORK_PROTOCOL_NAME_LABEL, ""),
+                protocol_version_kv: KeyValue::new(NETWORK_PROTOCOL_VERSION_LABEL, ""),
+                url_scheme_kv: KeyValue::new(URL_SCHEME_LABEL, ""),
+                method_kv: KeyValue::new(HTTP_REQUEST_METHOD_LABEL, ""),
+                route_kv_opt: None,
+                custom_request_attributes: Vec::new(),
+            },
+            inner_response_future: self.inner_service.call(request),
+        }
     }
 }
 
-pin_project! {
-    pub struct OTelResponseFuture<F> {
-        #[pin]
-        response_future: F,
-
-    }
-}
-
-impl<F, Error> Future for OTelResponseFuture<F>
+impl<F, ResBody, E> Future for OTelResponseFuture<F>
 where
-    F: Future<Output = Result<Response<Body>, Error>>,
+    F: Future<Output = Result<Response<ResBody>, E>>,
 {
-    type Output = Result<Response<Body>, Error>;
+    type Output = F::Output;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
 
-        match this.response_future.poll(cx) {
-            Poll::Ready(result) => return Poll::Ready(result),
-            Poll::Pending => {}
-        }
+        let inner_response = match this.inner_response_future.poll(cx) {
+            Poll::Pending => return Poll::Pending,
+            Poll::Ready(response) => response,
+        };
 
-        Poll::Pending
+        Poll::Ready(inner_response)
     }
 }
