@@ -1,2 +1,2 @@
-pub mod metrics;
+pub mod otel;
 pub mod timeout;

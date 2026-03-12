@@ -213,7 +213,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .build()
             .unwrap();
 
-    let otel_layer = middleware::metrics::OTelLayer::new();
+    let otel_layer = middleware::otel::OTelLayer::new();
 
     // bring logs and traces together with the tracing bridge
     let log_provider = init_logs(&config, otel_resource.clone());
