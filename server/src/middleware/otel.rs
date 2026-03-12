@@ -1,7 +1,7 @@
-use axum::body::Body;
 #[cfg(feature = "axum")]
 use axum::extract::MatchedPath;
 use axum::http::Response;
+use http;
 use opentelemetry::global::{self};
 use opentelemetry::metrics::Meter;
 use opentelemetry::metrics::{Histogram, UpDownCounter};
@@ -44,7 +44,7 @@ const HTTP_ROUTE_LABEL: &str = semconv::attribute::HTTP_ROUTE;
 const HTTP_RESPONSE_STATUS_CODE_LABEL: &str = semconv::attribute::HTTP_RESPONSE_STATUS_CODE;
 
 /// State scoped to the entire middleware Layer.
-struct HTTPLayerState {
+struct Instruments {
     pub server_request_duration: Histogram<f64>,
     pub server_active_requests: UpDownCounter<i64>,
     pub server_request_body_size: Histogram<u64>,
@@ -54,14 +54,14 @@ struct HTTPLayerState {
 #[derive(Clone)]
 /// [`Service`] used by [`OTelLayer`]
 pub struct OTelService<S> {
-    pub(crate) state: Arc<HTTPLayerState>,
+    pub(crate) instruments: Arc<Instruments>,
     inner_service: S,
 }
 
 #[derive(Clone)]
 /// [`Layer`] which applies the OTEL HTTP server metrics and tracing middleware
 pub struct OTelLayer {
-    state: Arc<HTTPLayerState>,
+    state: Arc<Instruments>,
 }
 
 impl OTelLayer {
@@ -156,8 +156,8 @@ impl OTelLayerBuilder {
         self
     }
 
-    fn make_state(meter: Meter, req_dur_bounds: Vec<f64>) -> HTTPLayerState {
-        HTTPLayerState {
+    fn make_state(meter: Meter, req_dur_bounds: Vec<f64>) -> Instruments {
+        Instruments {
             server_request_duration: meter
                 .f64_histogram(Cow::from(HTTP_SERVER_DURATION_METRIC))
                 .with_description("Duration of HTTP server requests.")
@@ -188,7 +188,7 @@ impl<S> Layer<S> for OTelLayer {
 
     fn layer(&self, service: S) -> Self::Service {
         OTelService {
-            state: self.state.clone(),
+            instruments: self.state.clone(),
             inner_service: service,
         }
     }
@@ -201,7 +201,7 @@ struct RequestData {
     // https://opentelemetry.io/docs/specs/semconv/http/http-metrics/#metric-httpserverrequestduration
     duration_start: Instant,
     // https://opentelemetry.io/docs/specs/semconv/http/http-metrics/#metric-httpserverrequestbodysize
-    req_body_size: Option<u64>,
+    content_length: Option<u64>,
 
     // fields for metric labels
     protocol_name_kv: KeyValue,
@@ -216,16 +216,17 @@ struct RequestData {
 
 pin_project! {
     pub struct OTelResponseFuture<F> {
-        #[pin]
         request_data: RequestData,
+        // #[pin]
+        instruments: Arc<Instruments>,
         #[pin]
         inner_response_future: F,
     }
 }
 
-impl<S, Request> Service<Request> for OTelService<S>
+impl<S, ReqBody, ResBody> Service<http::Request<ReqBody>> for OTelService<S>
 where
-    S: Service<Request, Response = Response<Body>>,
+    S: Service<http::Request<ReqBody>, Response = Response<ResBody>>,
 {
     type Response = S::Response;
     type Error = S::Error;
@@ -235,21 +236,29 @@ where
         self.inner_service.poll_ready(cx)
     }
 
-    fn call(&mut self, request: Request) -> Self::Future {
+    fn call(&mut self, req: http::Request<ReqBody>) -> Self::Future {
         let duration_start = Instant::now();
+
+        let headers = req.headers();
+        let content_length = headers
+            .get(http::header::CONTENT_LENGTH)
+            .and_then(|value| value.to_str().ok()?.parse::<u64>().ok());
+
+        let (protocol, version) = split_and_format_protocol_version(req.version());
 
         OTelResponseFuture {
             request_data: RequestData {
                 duration_start,
-                req_body_size: None,
-                protocol_name_kv: KeyValue::new(NETWORK_PROTOCOL_NAME_LABEL, ""),
-                protocol_version_kv: KeyValue::new(NETWORK_PROTOCOL_VERSION_LABEL, ""),
+                content_length,
+                protocol_name_kv: KeyValue::new(NETWORK_PROTOCOL_NAME_LABEL, protocol),
+                protocol_version_kv: KeyValue::new(NETWORK_PROTOCOL_VERSION_LABEL, version),
                 url_scheme_kv: KeyValue::new(URL_SCHEME_LABEL, ""),
                 method_kv: KeyValue::new(HTTP_REQUEST_METHOD_LABEL, ""),
                 route_kv_opt: None,
                 custom_request_attributes: Vec::new(),
             },
-            inner_response_future: self.inner_service.call(request),
+            instruments: self.instruments.clone(),
+            inner_response_future: self.inner_service.call(req),
         }
     }
 }
@@ -263,11 +272,43 @@ where
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
 
-        let inner_response = match this.inner_response_future.poll(cx) {
+        let _inner_response = match this.inner_response_future.poll(cx) {
             Poll::Pending => return Poll::Pending,
-            Poll::Ready(response) => response,
+            Poll::Ready(resp) => resp,
+        };
+        let inner_response = match _inner_response {
+            Ok(resp) => resp,
+            Err(e) => return Poll::Ready(Err(e)), // TODO do something about the error?
         };
 
-        Poll::Ready(inner_response)
+        let status = inner_response.status();
+
+        // Build base label set
+        let mut label_superset = vec![
+            this.request_data.protocol_name_kv.clone(),
+            this.request_data.protocol_version_kv.clone(),
+            // this.request_data.url_scheme_kv.clone(),
+            // this.request_data.method_kv.clone(),
+            KeyValue::new(HTTP_RESPONSE_STATUS_CODE_LABEL, i64::from(status.as_u16())),
+        ];
+
+        this.instruments.server_request_duration.record(
+            this.request_data.duration_start.elapsed().as_secs_f64(),
+            &label_superset,
+        );
+
+        Poll::Ready(Ok(inner_response))
     }
+}
+
+fn split_and_format_protocol_version(http_version: http::Version) -> (&'static str, &'static str) {
+    let version_str = match http_version {
+        http::Version::HTTP_09 => "0.9",
+        http::Version::HTTP_10 => "1.0",
+        http::Version::HTTP_11 => "1.1",
+        http::Version::HTTP_2 => "2.0",
+        http::Version::HTTP_3 => "3.0",
+        _ => "",
+    };
+    ("http", version_str)
 }

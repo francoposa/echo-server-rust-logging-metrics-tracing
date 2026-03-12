@@ -26,3 +26,4 @@ tower-service = { version = "0.3", default-features = false }
 tracing = { version = "0.1", features = ["attributes"], default-features = false }
 tracing-opentelemetry = { version = "0.32.0", features = ["metrics"], default-features = false }
 tracing-subscriber = { version = "0.3", features = ["json"], default-features = false }
+http = "1.4.0"
