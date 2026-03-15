@@ -245,6 +245,7 @@ where
             .and_then(|value| value.to_str().ok()?.parse::<u64>().ok());
 
         let (protocol, version) = split_and_format_protocol_version(req.version());
+        let route = PathExtractor::extract_route(&req);
 
         OTelResponseFuture {
             request_data: RequestData {
@@ -254,7 +255,7 @@ where
                 protocol_version_kv: KeyValue::new(NETWORK_PROTOCOL_VERSION_LABEL, version),
                 url_scheme_kv: KeyValue::new(URL_SCHEME_LABEL, ""),
                 method_kv: KeyValue::new(HTTP_REQUEST_METHOD_LABEL, ""),
-                route_kv_opt: None,
+                route_kv_opt: Some(KeyValue::new(HTTP_ROUTE_LABEL, route)),
                 custom_request_attributes: Vec::new(),
             },
             instruments: self.instruments.clone(),
@@ -298,6 +299,22 @@ where
         );
 
         Poll::Ready(Ok(inner_response))
+    }
+}
+
+pub trait RouteExtractor<B>: Clone + Send + Sync {
+    /// Extracts the route from the request, if available.
+    ///
+    /// Returns `None` to use method-only span names and skip the `http.route` attribute.
+    fn extract_route(req: &http::Request<B>) -> Arc<str>;
+}
+
+#[derive(Clone, Default)]
+pub struct PathExtractor;
+
+impl<B> RouteExtractor<B> for PathExtractor {
+    fn extract_route(req: &http::Request<B>) -> Arc<str> {
+        Arc::from(req.uri().path())
     }
 }
 
